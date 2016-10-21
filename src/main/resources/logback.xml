@@ -1,0 +1,19 @@
+<configuration debug="true">
+
+    <include resource="org/springframework/boot/logging/logback/base.xml"/>
+
+    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+        <file>/var/log/app_engine/custom_logs/app.log.json</file>
+        <append>true</append>
+        <!-- encoders are assigned the type ch.qos.logback.classic.encoder.PatternLayoutEncoder by default -->
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout
+                    class="com.strandapp.fbresponder.config.GCPCloudLoggingJSONLayout">
+                <pattern>%-4relative [%thread] %-5level %logger{35} - %msg</pattern>
+            </layout>
+        </encoder>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="FILE" />
+    </root>
+</configuration>
