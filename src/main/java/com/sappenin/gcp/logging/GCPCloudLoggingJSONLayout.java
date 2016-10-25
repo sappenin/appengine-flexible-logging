@@ -3,30 +3,30 @@ package com.sappenin.gcp.logging;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.PatternLayout;
 import ch.qos.logback.classic.spi.ILoggingEvent;
-import com.sappenin.gcp.logging.GCPCloudLoggingJSONLayout.GCPCloudLoggingEvent.GCPCloudLoggingTimestamp;
+import org.joda.time.DateTime;
 import org.json.JSONObject;
+import org.slf4j.MDC;
 
 import java.util.Map;
+import java.util.UUID;
 
+import static ch.qos.logback.classic.ClassicConstants.REQUEST_USER_AGENT_MDC_KEY;
 import static ch.qos.logback.classic.Level.*;
+import static com.sappenin.gcp.logging.Constants.*;
+import static com.sappenin.gcp.logging.MDCInsertingServletFilter.REQUEST_HEADER_PREFIX;
 
 /**
- * Format a LoggingEvent as a single line JSON object
+ * Format a LoggingEvent as a single line JSON object.
  * <p>
  * <br>https://cloud.google.com/appengine/docs/flexible/java/writing-application-logs
  * <p>
- * <br>From https://cloud.google.com/appengine/articles/logging
- * <quote>
- * Applications using the flexible environment should write custom log files to the VM's log directory at
- * /var/log/app_engine/custom_logs. These files are automatically collected and made available in the Logs Viewer.
- * Custom log files must have the suffix .log or .log.json. If the suffix is .log.json, the logs must be in JSON
- * format with one JSON object per line. If the suffix is .log, log entries are treated as plain text.
- * </quote>
+ * <br>From https://cloud.google.com/appengine/articles/logging <quote> Applications using the flexible environment
+ * should write custom log files to the VM's log directory at /var/log/app_engine/custom_logs. These files are
+ * automatically collected and made available in the Logs Viewer. Custom log files must have the suffix .log or
+ * .log.json. If the suffix is .log.json, the logs must be in JSON format with one JSON object per line. If the suffix
+ * is .log, log entries are treated as plain text. </quote>
  * <p>
- * Nathan: I can't find a reference to this format on the google pages but I do remember getting the format from some
- * GO code that a googler on the community slack channel referred me to.
- *
- * @see "http://stackoverflow.com/questions/37420400/how-do-i-map-my-java-app-logging-events-to-corresponding-cloud-logging-event-lev"
+ * This code was patterned off of the following StackOverflow <a href="http://stackoverflow.com/questions/37420400/how-do-i-map-my-java-app-logging-events-to-corresponding-cloud-logging-event-lev">question</a>.
  */
 public class GCPCloudLoggingJSONLayout extends PatternLayout {
 
@@ -38,28 +38,80 @@ public class GCPCloudLoggingJSONLayout extends PatternLayout {
 
     /* for testing without having to deal wth the complexity of super.doLayout()
      * Uses formattedMessage instead of event.getMessage() */
-    String doLayout_internal(String formattedMessage, ILoggingEvent event) {
-        GCPCloudLoggingEvent gcpLogEvent = new GCPCloudLoggingEvent(formattedMessage
-                , convertTimestampToGCPLogTimestamp(event.getTimeStamp())
-                , mapLevelToGCPLevel(event.getLevel())
-                , null);
-        JSONObject jsonObj = new JSONObject(gcpLogEvent);
+    String doLayout_internal(final String formattedMessage, final ILoggingEvent event) {
+        final GCPCloudLoggingEvent gcpLogEvent = new GCPCloudLoggingEvent(
+                // message
+                formattedMessage,
+                // timstamps
+                convertTimestampToGCPLogTimestamp(event.getTimeStamp()),
+                // severity
+                mapLevelToGCPLevel(event.getLevel()),
+                // Appengine Request Id
+                event.getMDCPropertyMap().get(REQUEST_ID_IDENTIFIER)
+        );
+
+        // The main object that will be logged...
+        JSONObject jsonLogObj = new JSONObject(gcpLogEvent);
+
+        // Add all MDC values that start with REQUEST_HEADER_PREFIX into the RequestHeaders object...
+        final JSONObject jsonRequestHeaders = new JSONObject();
+        Map<String, String> mdcContextMap = MDC.getCopyOfContextMap();
+        if (mdcContextMap == null) {
+            MDC.put(REQUEST_ID_IDENTIFIER, UUID.randomUUID().toString().replace("-", ""));
+            mdcContextMap = MDC.getCopyOfContextMap();
+        }
+
+        for (final String mdcKey : mdcContextMap.keySet()) {
+            if (mdcKey != null && mdcKey.startsWith(REQUEST_HEADER_PREFIX)) {
+                jsonRequestHeaders.put(mdcKey.replace(REQUEST_HEADER_PREFIX, ""), mdcContextMap.get(mdcKey));
+            }
+        }
+        jsonLogObj.put("requestHeaders", jsonRequestHeaders);
+
+        // Special fields for RequestLog (https://cloud.google.com/logging/docs/api/ref/rest/v1beta3/RequestLog)
+        //jsonLogObj.put("@type", "type.googleapis.com/google.appengine.logging.v1.RequestLog");
+        //jsonLogObj.put("resource", MDC.get(ClassicConstants.REQUEST_REQUEST_URI));
+        //jsonLogObj.put(METHOD, MDC.get(ClassicConstants.REQUEST_METHOD));
+        //jsonLogObj.put(HTTP_VERSION, MDC.get(HTTP_VERSION));
+        //jsonLogObj.put(RESOURCE, MDC.get(RESOURCE));
+
+        jsonLogObj.put(USER_AGENT, MDC.get(REQUEST_USER_AGENT_MDC_KEY));
+//        jsonLogObj.put("startTime", convertTimestampToGCPLogTimestamp(DateTime.now(DateTimeZone.UTC).getMillis()));
+//        jsonLogObj.put("endTime", convertTimestampToGCPLogTimestamp(DateTime.now(DateTimeZone.UTC).getMillis()));
+
+        // Response Info...
+        //jsonLogObj.put(STATUS, MDC.get(STATUS));
+
+        //jsonLogObj.put("startTime", MDC.get(START_TIME));
+        //jsonLogObj.put("endTime", MDC.get(END_TIME));
+
+//        List<LogLine> lines = new LinkedList<>();
+//        final LogLineBuilder logLineBuilder = LogLine.builder();
+//        logLineBuilder.severity("ERROR");
+//        logLineBuilder.logMessage("This was not supposed to happen!");
+//        logLineBuilder.time(DateTime.now(DateTimeZone.UTC).toString());
+//        lines.add(logLineBuilder.build());
+//        jsonLogObj.put("line", lines);
+
         /* Add a newline so that each JSON log entry is on its own line.
          * Note that it is also important that the JSON log entry does not span multiple lines.
          */
-        return jsonObj.toString() + "\n";
+        return jsonLogObj.toString() + "\n";
     }
 
-    static GCPCloudLoggingTimestamp convertTimestampToGCPLogTimestamp(long millisSinceEpoch) {
-        int nanos = ((int) (millisSinceEpoch % 1000)) * 1_000_000; // strip out just the milliseconds and convert to nanoseconds
-        long seconds = millisSinceEpoch / 1000L; // remove the milliseconds
-        return new GCPCloudLoggingTimestamp(seconds, nanos);
+    @Override
+    public Map<String, String> getDefaultConverterMap() {
+        return PatternLayout.defaultConverterMap;
     }
 
-    static String mapLevelToGCPLevel(Level level) {
+    private String convertTimestampToGCPLogTimestamp(long millisSinceEpoch) {
+        return new DateTime(millisSinceEpoch).toString("YYYY-MM-DD'T'HH:mm:ss.SSSSSS'Z'");
+    }
+
+    private String mapLevelToGCPLevel(Level level) {
         switch (level.toInt()) {
             case TRACE_INT:
-                return "TRACE";
+                return "REQUEST_ID_IDENTIFIER";
             case DEBUG_INT:
                 return "DEBUG";
             case INFO_INT:
@@ -69,26 +121,34 @@ public class GCPCloudLoggingJSONLayout extends PatternLayout {
             case ERROR_INT:
                 return "ERROR";
             default:
-                return null; /* This should map to no level in GCP Cloud Logging */
+                return "ERROR"; // Map to ERROR so that we can rectify...
         }
     }
 
-    /* Must be public for JSON marshalling logic */
+    /**
+     * A class that models a single line of output that can be consumed by the GCP agent piping log data to StackDriver.
+     * Must be public for JSON marshalling logic
+     */
     public static class GCPCloudLoggingEvent {
         private String message;
-        private GCPCloudLoggingTimestamp timestamp;
-        private String traceId;
+        // See https://developers.google.com/protocol-buffers/docs/reference/google.protobuf#timestamp
+        private String timestamp;
+        private String requestId;
         private String severity;
 
-        public GCPCloudLoggingEvent(
-                String message, GCPCloudLoggingTimestamp timestamp, String severity,
-                String traceId
-        ) {
-            super();
+        /**
+         * Required-args Constructor.
+         *
+         * @param message
+         * @param timestamp
+         * @param severity
+         * @param requestId
+         */
+        public GCPCloudLoggingEvent(String message, String timestamp, String severity, String requestId) {
             this.message = message;
             this.timestamp = timestamp;
-            this.traceId = traceId;
             this.severity = severity;
+            this.requestId = requestId;
         }
 
         public String getMessage() {
@@ -99,20 +159,20 @@ public class GCPCloudLoggingJSONLayout extends PatternLayout {
             this.message = message;
         }
 
-        public GCPCloudLoggingTimestamp getTimestamp() {
+        public String getTimestamp() {
             return timestamp;
         }
 
-        public void setTimestamp(GCPCloudLoggingTimestamp timestamp) {
-            this.timestamp = timestamp;
+        public void setTimestamp(String rfc3339Timestamp) {
+            this.timestamp = rfc3339Timestamp;
         }
 
-        public String getTraceId() {
-            return traceId;
+        public String getRequestId() {
+            return requestId;
         }
 
-        public void setTraceId(String traceId) {
-            this.traceId = traceId;
+        public void setRequestId(String requestId) {
+            this.requestId = requestId;
         }
 
         public String getSeverity() {
@@ -122,40 +182,7 @@ public class GCPCloudLoggingJSONLayout extends PatternLayout {
         public void setSeverity(String severity) {
             this.severity = severity;
         }
-
-        /* Must be public for JSON marshalling logic */
-        public static class GCPCloudLoggingTimestamp {
-            private long seconds;
-            private int nanos;
-
-            public GCPCloudLoggingTimestamp(long seconds, int nanos) {
-                super();
-                this.seconds = seconds;
-                this.nanos = nanos;
-            }
-
-            public long getSeconds() {
-                return seconds;
-            }
-
-            public void setSeconds(long seconds) {
-                this.seconds = seconds;
-            }
-
-            public int getNanos() {
-                return nanos;
-            }
-
-            public void setNanos(int nanos) {
-                this.nanos = nanos;
-            }
-
-        }
     }
 
-    @Override
-    public Map<String, String> getDefaultConverterMap() {
-        return PatternLayout.defaultConverterMap;
-    }
 
 }

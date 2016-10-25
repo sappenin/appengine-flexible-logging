@@ -1,0 +1,20 @@
+<configuration debug="true">
+
+    <!--<include resource="org/springframework/boot/logging/logback/base.xml"/>-->
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <!-- Stores a consumable log file at a well-known location. -->
+        <!-- See "Cloud Logging and the flexible environment" https://cloud.google.com/appengine/articles/logging -->
+        <!--<file>/var/log/app_engine/custom_logs/app.log.json</file>-->
+        <!--<append>true</append>-->
+        <!-- encoders are assigned the type ch.qos.logback.classic.encoder.PatternLayoutEncoder by default -->
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="com.sappenin.gcp.logging.GCPCloudLoggingJSONLayout">
+                <pattern>%-4relative [%thread] %-5level %logger{35}: %msg</pattern>
+            </layout>
+        </encoder>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>
